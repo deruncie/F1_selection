@@ -383,3 +383,143 @@ for(i in 1:ncol(selected_lines)){
 summary(selected_lines)
 write.csv(selected_lines,file = 'Accession_selection_for_F1s.csv',row.names=F)
 ```
+
+
+## Now, must try to replace lines that were not successfully ordered
+```{r}
+selected_lines = read.csv('Accession_selection_for_F1s.csv',stringsAsFactors = F)
+failed_lines = read.csv('Accessions_failed_order.csv',stringsAsFactors = F)
+failed_lines$CIMMYT_Number = as.numeric(sapply(failed_lines$CIMMYT_ID,function(x) strsplit(x,' ')[[1]][2]))
+failed_lines$ID = sprintf('CIMMYTMA-%06d',failed_lines$CIMMYT_Number)
+failed_lines = selected_lines[match(failed_lines$ID,selected_lines$ID),]
+failed_lines = failed_lines[order(failed_lines$Pair),]
+```
+
+Do selection. For each line that wasn't successfully ordered, select a new one that follows all the old characteristics: with 1 degree of Lat of other line of pair, at least 50 km from every other selected line.
+```{r}
+set.seed(1)
+
+old_selected_lines = selected_lines
+oldSelection_remaining = subset(selected_lines,ID %in% failed_lines$ID == F)
+new_lines = c()
+for(i in 1:nrow(failed_lines)){
+  all_selected_ID = c(old_selected_lines$ID,new_lines$ID)
+  Mex_avail_spdf = Mex_candidate_spdf[apply(line_dist_Mex[Mex_candidate_spdf$ID %in% all_selected_ID,],2,min) > 50,]
+  SA_avail_spdf = SA_candidate_spdf[apply(line_dist_SA[SA_candidate_spdf$ID %in% all_selected_ID,],2,min) > 50,]
+  
+  other_line = subset(oldSelection_remaining,Pair == failed_lines$Pair[i])
+  
+  if(grepl('Mex',failed_lines$Pair[i])){
+    candidates_spdf = Mex_avail_spdf[Mex_avail_spdf$Elevation_class == failed_lines$Elevation_class[i],]
+  } else{
+    candidates_spdf = SA_avail_spdf[SA_avail_spdf$Elevation_class == failed_lines$Elevation_class[i],]
+  }
+  candidates_Lat_spdf = candidates_spdf[abs(candidates_spdf$Lat - other_line$Lat) < 1,]
+  if(nrow(candidates_Lat_spdf) > 0){
+    selected_ID = sample(candidates_Lat_spdf$ID,1)
+    if(grepl('Mex',failed_lines$Pair[i])){
+      print(diff(Mex_candidate_spdf$Lat[match(c(as.character(selected_ID),other_line$ID),Mex_candidate_spdf$ID)]))
+    } else {
+      print(diff(SA_candidate_spdf$Lat[match(c(as.character(selected_ID),other_line$ID),SA_candidate_spdf$ID)]))
+    }
+    new_lines = rbind(new_lines,data.frame(ID = selected_ID, old = failed_lines$ID[i]))
+  } else{
+    if(grepl('Mex',failed_lines$Pair[i])){
+      orig_lines = match(Mex_avail_spdf$ID,Mex_candidate_spdf$ID)
+      selected_ID = Mex_avail_spdf$ID[select_lines(Mex_avail_spdf,line_dist_Mex[orig_lines,orig_lines],min_Dist = 50,lat_range = 1,1)]
+    } else{
+      orig_lines = match(SA_avail_spdf$ID,SA_candidate_spdf$ID)
+      selected_ID = SA_avail_spdf$ID[select_lines(SA_avail_spdf,line_dist_SA[orig_lines,orig_lines],min_Dist = 50,lat_range = 1,1)]
+    }
+    print(selected_ID)
+    print(diff(SA_avail_spdf$Lat[match(selected_ID,SA_avail_spdf$ID)]))
+    new_lines = rbind(new_lines,data.frame(ID = selected_ID[1], old = failed_lines$ID[i]))
+    new_lines = rbind(new_lines,data.frame(ID = selected_ID[2], old = other_line$ID))
+    failed_lines = rbind(failed_lines,oldSelection_remaining[match(other_line$ID,oldSelection_remaining$ID),])
+    oldSelection_remaining = subset(oldSelection_remaining,ID != other_line$ID)
+  }
+}
+new_lines = new_lines[match(failed_lines$ID,new_lines$old),]
+```
+
+```{r}
+pdf('Replacement_lines_3_2_16.pdf')
+
+Mex_lines = Mex_candidate_spdf[Mex_candidate_spdf$ID %in% old_selected_lines$ID,]
+
+ggplot() + ggtitle('Central America') + #xlim(range(Mex_map$long)) + ylim(range(Mex_map$lat)) +
+		geom_polygon(data=Mex_map,aes(x=long,y=lat,group=group),fill='white') + 
+		geom_point(data = Mex_candidate_spdf@data,aes(x=Long,y=Lat,color = interaction(Elevation_class)),size = .2,alpha = .05) +
+		# geom_segment(data = paired_lines,aes(x = Long,y=Lat,xend=Long2,yend = Lat2),size=.1) 
+		geom_point(data=Mex_lines@data,aes(x=Long,y=Lat),color='black',size=1.2)+
+		geom_point(data=Mex_lines@data,aes(x=Long,y=Lat,color=interaction(Elevation_class)),size=2)
+
+Mex_lines = Mex_candidate_spdf[Mex_candidate_spdf$ID %in% c(oldSelection_remaining$ID,as.character(new_lines$ID)),]
+
+ggplot() + ggtitle('Central America') + #xlim(range(Mex_map$long)) + ylim(range(Mex_map$lat)) +
+		geom_polygon(data=Mex_map,aes(x=long,y=lat,group=group),fill='white') + 
+		geom_point(data = Mex_candidate_spdf@data,aes(x=Long,y=Lat,color = interaction(Elevation_class)),size = .2,alpha = .05) +
+		# geom_segment(data = paired_lines,aes(x = Long,y=Lat,xend=Long2,yend = Lat2),size=.1) 
+		geom_point(data=Mex_lines@data,aes(x=Long,y=Lat),color='black',size=1.2)+
+		geom_point(data=Mex_lines@data,aes(x=Long,y=Lat,color=interaction(Elevation_class)),size=2)
+
+
+SA_lines = SA_candidate_spdf[SA_candidate_spdf$ID %in% old_selected_lines$ID,]
+
+ggplot() + ggtitle('South America - original selection') +
+		geom_polygon(data=SA_map_mod,aes(x=long,y=lat,group=group),fill='white') + 
+		geom_point(data = SA_candidate_spdf@data,aes(x=Long,y=Lat,color = interaction(Elevation_class)),size = .2,alpha = .05) +
+		# geom_segment(data = paired_lines,aes(x = Long,y=Lat,xend=Long2,yend = Lat2),size=.1) 
+		geom_point(data=SA_lines@data,aes(x=Long,y=Lat),color='black',size=1.2)+
+		geom_point(data=SA_lines@data,aes(x=Long,y=Lat,color=interaction(Elevation_class)),size=2) + xlim(SA_xlim) + ylim(SA_ylim)
+
+SA_lines = SA_candidate_spdf[SA_candidate_spdf$ID %in% unique(c(as.character(oldSelection_remaining$ID),as.character(new_lines$ID))),]
+
+ggplot() + ggtitle('South America - new lines 3/2/16') +
+		geom_polygon(data=SA_map_mod,aes(x=long,y=lat,group=group),fill='white') + 
+		geom_point(data = SA_candidate_spdf@data,aes(x=Long,y=Lat,color = interaction(Elevation_class)),size = .2,alpha = .05) +
+		# geom_segment(data = paired_lines,aes(x = Long,y=Lat,xend=Long2,yend = Lat2),size=.1) 
+		geom_point(data=SA_lines@data,aes(x=Long,y=Lat),color='black',size=1.2)+
+		geom_point(data=SA_lines@data,aes(x=Long,y=Lat,color=interaction(Elevation_class)),size=2) + xlim(SA_xlim) + ylim(SA_ylim)
+
+dev.off()
+```
+
+Now save these to a file, with normal info:
+```{r}
+selected_lines = rbind(Mex_lines@data,SA_lines@data)
+selected_lines = merge(selected_lines,SeeD_lines,by.x='ID',by.y = 'AccID',all.x=T,all.y=F)
+# only 4 GRIN lines, so drop those columns
+selected_lines = selected_lines[,!grepl('GRIN',colnames(selected_lines))]
+selected_lines = selected_lines[,!grepl('.y',colnames(selected_lines))]
+colnames(selected_lines) = sub('.x','',colnames(selected_lines))
+
+# now have to fix the pair names so that they correspond to the original names
+old_selected_lines = read.csv('Accession_selection_for_F1s.csv')
+# first, re-assign all old pair names
+selected_lines$Pair = old_selected_lines$Pair[match(selected_lines$ID,old_selected_lines$ID)]
+# Then assign each new line to an existing pair (if possible)
+selected_lines$Pair[match(new_lines$ID,selected_lines$ID)] = old_selected_lines$Pair[match(new_lines$old,old_selected_lines$ID)]
+# For pairs in which both lines are replaced, give a new Pair_ID
+selected_lines$Replaced_line = new_lines$old[match(selected_lines$ID,new_lines$ID)]
+max_Pair_IDs = sapply(c('Mex_','SA_'),function(x) max(as.numeric(sub(x,'',selected_lines$Pair)),na.rm=T))
+new_pairs = with(selected_lines,unique(Pair)[sapply(unique(Pair),function(x) sum(!is.na(Replaced_line[Pair==x]))==2)])
+for(pair in new_pairs){
+  if(grepl('Mex',pair)){
+    levels(selected_lines$Pair)[levels(selected_lines$Pair) == pair] = paste0('Mex_',max_Pair_IDs[1]+1)
+    max_Pair_IDs[1] = max_Pair_IDs[1] + 1
+  } else{
+    levels(selected_lines$Pair)[levels(selected_lines$Pair) == pair] = paste0('SA_',max_Pair_IDs[2]+1)
+    max_Pair_IDs[1] = max_Pair_IDs[2] + 1
+  }
+}
+t(with(selected_lines,tapply(1:length(Pair),Pair,length)))
+
+
+subset(selected_lines,ID %in% failed_lines$ID)
+subset(selected_lines,ID %in% new_lines$ID)
+
+write.csv(selected_lines,file = 'Accession_selection_for_F1s_3_2_16.csv',row.names=F)
+write.csv(subset(selected_lines,ID %in% new_lines$ID),file = 'Replacement_lines_for_F1s_3_2_16.csv',row.names=F)
+```
+
