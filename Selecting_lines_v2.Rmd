@@ -1,0 +1,385 @@
+---
+title: "Selecting lines for HiLo F1s"
+author: "Daniel Runcie"
+output: pdf_document
+---
+
+```{r echo = F}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+```{r}
+library(sp)
+library(maps)
+library(maptools)
+library(mapdata)
+library(Grid2Polygons)
+library(readxl)
+library(ggplot2)
+library(geosphere)
+```
+
+### Start with SeeD GWAS GBS lines
+I want all lines we select to be here to be able to take advantage of potential genotype info
+
+Load the SeeDs data and match up with the CIMMYT data to extract CIMMYT availability and IDs
+```{r}
+SeeD_lines = read.delim('2016.01.27_18.09.04.txt',stringsAsFactors=F)
+SeeD_lines = SeeD_lines[,c('id','general_identifier','bank_number','collnumb','colldate',
+							'locations_elevation','locations_latitude','locations_longitude',
+							'countries_country_code3','Sample.ID.of.DNA.from.single.plants.used.in.GWAS',
+							'PrimaryRace','SecondaryRace')]
+SeeD_lines$Long = SeeD_lines$locations_longitude
+SeeD_lines$Lat = SeeD_lines$locations_latitude
+SeeD_lines$Elevation = SeeD_lines$locations_elevation
+```
+
+### Load CIMMYT data for availability:
+
+CIMMYT data and name conversion table, match up, and add bank numbers to CIMMYT_data table
+```{r}
+CIMMYT_data = read.csv('CIMMYT export_2016_02_05_02_57_26.csv',stringsAsFactors=F)
+CIMMYT_data$ID = as.numeric(sub('CIMMYTMA ','',CIMMYT_data$Plant.ID))
+CIMMYT_data$AccID = sprintf('CIMMYTMA-%06d',CIMMYT_data$ID)
+
+# Load CIMMYT name conversion table
+CIMMYT_IDs = read_excel('AccID Bank No and GID 17k GIS accns.xlsx')
+CIMMYT_data$bankaccessionnumber = CIMMYT_IDs$bankaccessionnumber[match(CIMMYT_data$AccID,CIMMYT_IDs$AccID)]
+```
+
+Add CIMMYT info to SeeD:
+```{r}
+# I don't think we want these anyway. Seem to be all other species
+SeeD_lines_missing_in_CIMMYT_IDS = which(!SeeD_lines$bank_number %in% CIMMYT_IDs$bankaccessionnumber)
+
+index = match(SeeD_lines$bank_number,CIMMYT_data$bankaccessionnumber)
+
+SeeD_lines$CIMMYT_ID           = CIMMYT_data$Plant.ID[index]
+SeeD_lines$AccID               = CIMMYT_data$AccID[index]
+SeeD_lines$CIMMYT_Availability = CIMMYT_data$Availability[index]
+SeeD_lines$AccID[is.na(SeeD_lines$AccID)] = ''
+```
+
+### Load GRIN data for Lat/Long/Elevation of some lines
+Load GRIN data
+```{r echo = F}
+GRIN_data = read.csv('GRIN_data_all.csv',stringsAsFactors = F)
+GRIN_data = GRIN_data[,c('avail','collnumb','accename','accenumb','origcty','collsite',
+						'elevation','colldate','donornumb',
+						'othernumb','latdec','longdec','latitude','longitude')]
+GRIN_data$Long = GRIN_data$longdec
+GRIN_data$Lat = GRIN_data$latdec
+
+GRIN_data$Elevation = GRIN_data$elevation
+
+# GRIN_data = subset(GRIN_data,origcty %in% c('MEX','PER','COL','BRA','BOL','ARG','ECU','GTM','CHL','URY','VEN','CRI','HND','BLZ','NIC','PAN','SLV','TTO','VIR'))
+
+CIMMYT_ids = lapply(GRIN_data$othernumb,function(x) {
+	ids = strsplit(x,';')[[1]]
+	ids = sub(':','',ids)
+	cimmyt_id = ids[grepl('CIMMYTMA',ids)]
+	return(cimmyt_id)
+})
+
+```
+
+Identify lines with multiple CIMMYTMA IDs. Exclude these lines. Numbers of lines with 0-2 CIMMYTMA IDs:
+```{r }
+summary(factor(sapply(CIMMYT_ids,length)))
+
+GRIN_data$CIMMYT_ID = NA
+GRIN_data$CIMMYT_ID[sapply(CIMMYT_ids,length) == 1] = unlist(CIMMYT_ids[sapply(CIMMYT_ids,length) == 1])
+GRIN_data$CIMMYT_ID[sapply(CIMMYT_ids,length) == 2] = 'duplicate'
+```
+
+Identify lines that share the same CIMMYTMA ID. Exclude these lines.
+```{r}
+a = summary(factor(GRIN_data$CIMMYT_ID),maxsum=Inf)
+non_singleton_CIMMYT_ID = names(a[a>1])
+length(non_singleton_CIMMYT_ID)
+GRIN_data = subset(GRIN_data,CIMMYT_ID %in% non_singleton_CIMMYT_ID == F)
+```
+
+
+Match up GRIN and SeeD and add missing Elevation. 
+
+**When info differs for the same line, use SeeD for Lat/Long, and GRIN for elevation**
+```{r}
+par(mfrow=c(2,2))
+index = match(SeeD_lines$AccID,GRIN_data$CIMMYT_ID)
+sum(is.na(SeeD_lines$Long) & !is.na(GRIN_data$Long[index]))
+plot(SeeD_lines$Long,GRIN_data$Long[index])
+sum(is.na(SeeD_lines$Lat) & !is.na(GRIN_data$Lat[index]))
+plot(SeeD_lines$Lat,GRIN_data$Lat[index])
+sum(is.na(SeeD_lines$Elevation) & !is.na(GRIN_data$Elevation[index]))
+plot(SeeD_lines$Elevation,GRIN_data$Elevation[index])
+
+par(mfrow=c(1,1))
+
+SeeD_lines$SeeD_Elevation = SeeD_lines$Elevation
+SeeD_lines$Elevation[!is.na(GRIN_data$Elevation[index])] = GRIN_data$Elevation[index][!is.na(GRIN_data$Elevation[index])]
+
+colnames(GRIN_data) = paste0('GRIN_',colnames(GRIN_data))
+
+SeeD_lines = merge(x=SeeD_lines,y=GRIN_data,by.x = 'AccID',by.y = 'GRIN_CIMMYT_ID',all.x=T,all.y=F)
+SeeD_lines = SeeD_lines[,colnames(SeeD_lines) %in% c(
+                        "locations_elevation","locations_latitude","locations_longitude",
+                        "GRIN_latdec","GRIN_longdec", "GRIN_latitude","GRIN_longitude"
+                        ) == F]
+
+
+SeeD_lines$Elevation_flag = abs(SeeD_lines$SeeD_Elevation - SeeD_lines$GRIN_Elevation) > 500
+SeeD_lines$Elevation_flag[is.na(SeeD_lines$Elevation_flag)] = F
+```
+
+### Drop lines without coordinates
+```{r}
+SeeD_lines = subset(SeeD_lines,!is.na(Lat) & !is.na(Long) & !is.na(Elevation) & !Elevation_flag)
+```
+
+### Load Current F1s
+```{r}
+# add lines currently under F1 development
+current_F1s = as.data.frame(read_excel('Genome_Passport_Current_F1_progress.xlsx'))
+current_F1s = subset(current_F1s,Outbred == 'Y' & F1_made == 'Y')
+current_F1s$CIMMYT_Availability = SeeD_lines$CIMMYT_Availability[match(current_F1s$GRIN_ID,SeeD_lines$GRIN_accenumb)]
+current_F1s$CIMMYT_ID = SeeD_lines$AccID[match(current_F1s$GRIN_ID,SeeD_lines$GRIN_accenumb)]
+```
+
+### Make all available lines database
+```{r}
+allLines = rbind(
+  with(SeeD_lines,data.frame(Type = 'SeeD',ID = AccID,Long = Long, Lat = Lat, Elevation = Elevation, Race = PrimaryRace,
+                             CIMMYT_Availability = CIMMYT_Availability)),
+  with(current_F1s,data.frame(Type = 'Current_F1',ID = RI_Accession,Long = Long, Lat = Lat, Elevation = Elevation,
+                             Race = toupper(Landrace), CIMMYT_Availability = CIMMYT_Availability))
+       )
+allLines = subset(allLines,CIMMYT_Availability == 'Add to Cart')
+dim(allLines)
+```
+
+Which lines have GBS?
+```{r}
+GBS_lines= read.delim(pipe('cut -f1 chr10_unimputed_distance.txt'),stringsAsFactors=F,skip=5,h=F)[,1]
+GBS_lines = sapply(GBS_lines,function(x) strsplit(x,':')[[1]][1])
+CIMMYT_ID_with_GBS = SeeD_lines$AccID[SeeD_lines$Sample.ID.of.DNA.from.single.plants.used.in.GWAS %in% GBS_lines]
+allLines$GBS = F
+allLines$GBS[allLines$ID %in% CIMMYT_ID_with_GBS] = T
+```
+
+
+Divide lines by elevation:
+```{r}
+Elevation_breaks = c(1000,2000)
+allLines$Elevation_class = 'High'
+allLines$Elevation_class[allLines$Elevation < Elevation_breaks[2]] = 'Mid'
+allLines$Elevation_class[allLines$Elevation < Elevation_breaks[1]] = 'Low'
+allLines$Elevation_class = factor(allLines$Elevation_class,levels = c('Low','Mid','High'))
+```
+
+Subset lines by regions (Central America vs South America). Plot
+```{r}
+allLines_sp = SpatialPoints(allLines[,c('Long','Lat')])
+allLines_spdf = SpatialPointsDataFrame(allLines_sp,allLines)
+
+SA_regions = c('Colombia','Ecuador','Peru','Bolivia','Chile','Argentina','Venezuela')
+Mex_regions = c('Belize','Guatemala','Honduras','Mexico','El Salvador') #,'Nicaragua','Costa Rica','Panama'
+
+ROI_map = map('world',regions = c(Mex_regions,SA_regions),fill=T,plot=F)
+
+ROI_polygons <- map2SpatialPolygons(ROI_map, IDs=ROI_map$names)
+
+allLines_spdf = allLines_spdf[!is.na(over(allLines_spdf,ROI_polygons)),]
+
+
+
+Mex_map = map('world',regions = Mex_regions,fill=T,plot=F)
+Mex_polygons <- map2SpatialPolygons(Mex_map, IDs=Mex_map$names)
+Mex_exclude = SpatialPolygons(list(
+	Polygons(list(
+		Baja = Polygon(cbind(c(-108,-120,-120,-114),c(23,23,35,31))),
+		Yucatan = Polygon(cbind(c(-92,-85,-85,-92),c(18,18,23,23)))
+		),c('a'))
+	))
+
+
+SA_map = map('world',regions = SA_regions,fill=T,plot=F)
+SA_polygons <- map2SpatialPolygons(SA_map, IDs=SA_map$names)
+SA_exclude = SpatialPolygons(list(
+	Polygons(list(
+		E_Argintina = Polygon(cbind(c(-65,-60,-50,-50),c(-35,-22,-22,-35)))
+		),c('a'))
+	))
+
+Mex_spdf = allLines_spdf[!is.na(over(allLines_spdf,Mex_polygons)),]
+SA_spdf = allLines_spdf[!is.na(over(allLines_spdf,SA_polygons)),]
+```
+
+### Selecting candidate lines
+Selection based on:
+
+1. Available in CIMMYT
+2. Either < 1000m or > 2000m
+3. In SeeD database (although elevation info may have come from GRIN)
+
+```{r}
+Mex_map = map_data('world',regions = Mex_regions)
+ggplot(Mex_map,aes(x=long,y=lat,group=group)) + ggtitle('All Available lines') +
+		geom_polygon(fill='white') + 
+		geom_polygon(data=Mex_exclude,alpha = .2) +
+		geom_point(data=Mex_spdf@data,aes(x=Long,y=Lat,color=Elevation_class,group=1),size=.5)
+
+Mex_candidate_spdf = Mex_spdf[!Mex_spdf$Elevation_class == 'Mid' & is.na(over(Mex_spdf,Mex_exclude)),]
+Mex_candidate_spdf = Mex_candidate_spdf[is.na(over(Mex_candidate_spdf,Mex_exclude)),]
+
+ggplot(Mex_map,aes(x=long,y=lat,group=group)) + ggtitle('Low / High lines') +
+		geom_polygon(fill='white') + 
+		geom_polygon(data=Mex_exclude,alpha = .2) +
+		geom_point(data=Mex_candidate_spdf@data,aes(x=Long,y=Lat,color=interaction(Elevation_class),group=1),size=.5)
+
+line_dist_Mex = distm(Mex_candidate_spdf@data[,c('Long','Lat')],fun = distGeo)/1000 # to Km
+```
+
+```{r}
+SA_map = map_data('world',regions = SA_regions)
+ggplot(SA_map,aes(x=long,y=lat,group=group)) + ggtitle('All Available lines') +
+		geom_polygon(fill='white') + 
+		geom_polygon(data=SA_exclude,alpha = .2) +
+		geom_point(data=SA_spdf@data,aes(x=Long,y=Lat,color=Elevation_class,group=1),size=.5)
+
+SA_candidate_spdf = SA_spdf[!SA_spdf$Elevation_class == 'Mid' & is.na(over(SA_spdf,SA_exclude)),]
+SA_candidate_spdf = SA_candidate_spdf[is.na(over(SA_candidate_spdf,SA_exclude)),]
+
+ggplot(SA_map,aes(x=long,y=lat,group=group)) + ggtitle('Low / High lines') +
+		geom_polygon(fill='white') + 
+		geom_polygon(data=SA_exclude,alpha = .2) +
+		geom_point(data=SA_candidate_spdf@data,aes(x=Long,y=Lat,color=interaction(Elevation_class,Type),group=1),size=.5)
+
+line_dist_SA = distm(SA_candidate_spdf@data[,c('Long','Lat')],fun = distGeo)/1000 # to Km
+```
+
+
+### Selection algorithm 1
+In this algorithm, I randomly select a number of high elevation lines, with the restriction that they cannot be too close together. Then for each high line, I pick a low line in the same latitude band, also not too close to any other line
+
+```{r}
+select_lines = function(allLines_spdf,line_dist,min_Dist = 50,lat_range = 0.5,targetNumber = 40){
+	high_lines = which(allLines_spdf$Elevation_class == 'High')
+	low_lines = which(allLines_spdf$Elevation_class == 'Low')
+#
+	selected_lines = matrix(NA,nc = 2, nr = targetNumber)
+	
+	# select high lines
+	# start with Current_F1s if available
+	lines = which(allLines_spdf$Type == 'Current_F1' & allLines_spdf$Elevation_class == 'High')
+	if(length(lines) == 0){
+	  lines = sample(high_lines,1)
+	}
+	selected_lines[1:length(lines),2] = lines
+	high_lines = high_lines[high_lines %in% lines == F]
+#
+	if(targetNumber > length(lines)) {
+  	for(i in (length(lines)+1):targetNumber){
+  		candidate_lines = high_lines[apply(line_dist[high_lines,na.omit(c(selected_lines[1:i,])),drop=F],1,min) > min_Dist]
+  		selected_lines[i,2] = candidate_lines[sample(1:length(candidate_lines),1)]
+  		high_lines = high_lines[high_lines %in% na.omit(selected_lines[,2]) == F]
+  	}
+	}
+	
+	# select low lines - NOTE: won't get all Current_F1 low lines.
+	# start with Current_F1s if available
+	lines = which(allLines_spdf$Type == 'Current_F1' & allLines_spdf$Elevation_class == 'Low')
+	if(length(lines) > 0){
+	  # find an appropriate high line based on latitude
+	  for(line in lines) {
+	    candidate_lines = which(is.na(selected_lines[,1]))
+	    matched_high_lines = which(abs(allLines_spdf$Lat[selected_lines[candidate_lines,2]] - allLines_spdf$Lat[line]) < lat_range)
+	    if(length(matched_high_lines) > 0){
+	      selected_lines[matched_high_lines[1],1] = line
+	      lines = lines[lines != line]
+	    } 
+	  }
+	}
+	for(i in 1:targetNumber) {
+	  if(!is.na(selected_lines[i,1])) next
+		candidate_lines = low_lines[apply(line_dist[low_lines,na.omit(c(selected_lines)),drop=F],1,min) > min_Dist]
+		candidate_lines = candidate_lines[abs(allLines_spdf[candidate_lines,]$Lat - allLines_spdf[selected_lines[i,2],]$Lat) < lat_range]
+		if(length(candidate_lines) == 0) break
+		selected_lines[i,1] = candidate_lines[sample(1:length(candidate_lines),1)]
+		low_lines = low_lines[low_lines %in% na.omit(selected_lines[,1]) == F]
+	}
+	selected_lines = selected_lines[!is.na(selected_lines[,1]),]
+	return(selected_lines)
+}
+```
+
+
+### Select Mex lines
+```{r}
+
+# pdf('Accession_selection_for_F1s.pdf')
+set.seed(1)
+
+targetNumber_Mex = 30
+
+Mex_xlim = range(Mex_map$long)
+Mex_ylim = range(Mex_map$lat)
+Mex_selection = select_lines(Mex_candidate_spdf,line_dist_Mex,min_Dist = 50,lat_range = 1,targetNumber_Mex)
+Mex_lines = Mex_candidate_spdf[c(Mex_selection),]
+summary(Mex_lines$Type)
+n = nrow(Mex_lines)/2
+paired_lines = cbind(Mex_lines@data[1:n,c('Long','Lat')],Mex_lines@data[n+1:n,c('Long','Lat')])
+colnames(paired_lines)[3:4] = c('Long2','Lat2')
+
+summary(Mex_lines$Elevation_class)
+ggplot() + ggtitle('Central America') + #xlim(range(Mex_map$long)) + ylim(range(Mex_map$lat)) +
+		geom_polygon(data=Mex_map,aes(x=long,y=lat,group=group),fill='white') + 
+		geom_point(data = Mex_candidate_spdf@data,aes(x=Long,y=Lat,color = interaction(Elevation_class)),size = .2,alpha = .05) +
+		# geom_segment(data = paired_lines,aes(x = Long,y=Lat,xend=Long2,yend = Lat2),size=.1) 
+		geom_point(data=Mex_lines@data,aes(x=Long,y=Lat),color='black',size=1.2)+
+		geom_point(data=Mex_lines@data,aes(x=Long,y=Lat,color=interaction(Elevation_class)),size=2)
+```
+
+### Select SA lines
+```{r}
+set.seed(10)
+
+targetNumber_SA = 30
+
+SA_xlim = c(-84,max(SA_map$long))
+SA_ylim = c(-30,max(SA_map$lat))
+SA_map_mod = SA_map
+SA_map_mod$lat = pmax(SA_map_mod$lat,SA_ylim[1])
+SA_selection = select_lines(SA_candidate_spdf,line_dist_SA,min_Dist = 50,lat_range = 1,targetNumber_SA)
+SA_lines = SA_candidate_spdf[c(SA_selection),]
+summary(SA_lines$Type)
+n = nrow(SA_lines)/2
+paired_lines = cbind(SA_lines@data[1:n,c('Long','Lat')],SA_lines@data[n+1:n,c('Long','Lat')])
+colnames(paired_lines)[3:4] = c('Long2','Lat2')
+
+summary(SA_lines$Elevation_class)
+ggplot() + ggtitle('South America') +
+		geom_polygon(data=SA_map_mod,aes(x=long,y=lat,group=group),fill='white') + 
+		geom_point(data = SA_candidate_spdf@data,aes(x=Long,y=Lat,color = interaction(Elevation_class)),size = .2,alpha = .05) +
+		# geom_segment(data = paired_lines,aes(x = Long,y=Lat,xend=Long2,yend = Lat2),size=.1) 
+		geom_point(data=SA_lines@data,aes(x=Long,y=Lat),color='black',size=1.2)+
+		geom_point(data=SA_lines@data,aes(x=Long,y=Lat,color=interaction(Elevation_class)),size=2) + xlim(SA_xlim) + ylim(SA_ylim)
+# dev.off()
+```
+
+## Save lines in a DF
+```{r}
+selected_lines = rbind(data.frame(Pair = rep(paste0('Mex_',1:nrow(Mex_selection)),2),Mex_lines@data),
+                       data.frame(Pair = rep(paste0('SA_',1:nrow(SA_selection)),2),SA_lines@data))
+selected_lines = merge(selected_lines,SeeD_lines,by.x='ID',by.y = 'AccID',all.x=T,all.y=F)
+# only 4 GRIN lines, so drop those columns
+selected_lines = selected_lines[,!grepl('GRIN',colnames(selected_lines))]
+selected_lines = selected_lines[,!grepl('.y',colnames(selected_lines))]
+colnames(selected_lines) = sub('.x','',colnames(selected_lines))
+selected_lines$CIMMYT_ID[grep('RIMM',selected_lines$ID)] = current_F1s$CIMMYT_ID[match(selected_lines$ID[grep('RIMM',selected_lines$ID)],current_F1s$RI_Accession)]
+for(i in 1:ncol(selected_lines)){
+  if(class(selected_lines[,i]) == 'character') selected_lines[,i] = factor(selected_lines[,i])
+}
+summary(selected_lines)
+write.csv(selected_lines,file = 'Accession_selection_for_F1s.csv',row.names=F)
+```
