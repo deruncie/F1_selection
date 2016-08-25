@@ -181,6 +181,7 @@ Subset lines by regions (Central America vs South America). Plot
 ```{r}
 allLines_sp = SpatialPoints(allLines[,c('Long','Lat')])
 allLines_spdf = SpatialPointsDataFrame(allLines_sp,allLines)
+allLines_spdf$ID = as.character(allLines_spdf$ID)
 
 SA_regions = c('Colombia','Ecuador','Peru','Bolivia','Chile','Argentina','Venezuela')
 Mex_regions = c('Belize','Guatemala','Honduras','Mexico','El Salvador') #,'Nicaragua','Costa Rica','Panama'
@@ -384,7 +385,7 @@ for(i in 1:ncol(selected_lines)){
   if(class(selected_lines[,i]) == 'character') selected_lines[,i] = factor(selected_lines[,i])
 }
 summary(selected_lines)
-write.csv(selected_lines,file = 'Accession_selection_for_F1s.csv',row.names=F)
+# write.csv(selected_lines,file = 'Accession_selection_for_F1s.csv',row.names=F)
 ```
 
 
@@ -526,3 +527,248 @@ write.csv(selected_lines,file = 'Accession_selection_for_F1s_3_2_16.csv',row.nam
 write.csv(subset(selected_lines,ID %in% new_lines$ID),file = 'Replacement_lines_for_F1s_3_2_16.csv',row.names=F)
 ```
 
+## adding Mid-elevation lines
+For both SA and Mex, Ruaridh wants a mid-elevation line selected, following same rules as before
+
+Mex:
+```{r}
+# pull out mid-elevation lines and add in selected lines info
+selected_lines = read.csv('Accession_selection_for_F1s_3_2_16.csv',stringsAsFactors = F)
+Mex_map = map_data('world',regions = Mex_regions)
+
+Mex_candidate_spdf = Mex_spdf[(Mex_spdf$Elevation_class == 'Mid' & is.na(over(Mex_spdf,Mex_exclude))) | Mex_spdf$ID %in% selected_lines$ID,]
+Mex_candidate_spdf = Mex_candidate_spdf[is.na(over(Mex_candidate_spdf,Mex_exclude)),]
+
+ggplot(Mex_map,aes(x=long,y=lat,group=group)) + ggtitle('Low / High lines') +
+		geom_polygon(fill='white') + 
+		geom_polygon(data=Mex_exclude,alpha = .2) +
+		geom_point(data=Mex_candidate_spdf@data,aes(x=Long,y=Lat,color=Elevation_class,group=1),size=.5)
+
+line_dist_Mex = distm(Mex_candidate_spdf@data[,c('Long','Lat')],fun = distGeo)/1000 # to Km
+colnames(line_dist_Mex) = rownames(line_dist_Mex) = Mex_candidate_spdf$ID
+```
+
+```{r}
+set.seed(1)
+hi_low_pairs_Mex = subset(selected_lines,grepl('Mex',Pair))
+new_lines = c()
+Pairs = sample(unique(hi_low_pairs_Mex$Pair))
+# will keep trying until get a complete set
+min_dist = 50
+count = 0
+while(length(Pairs) > 0) {
+# for(pair in Pairs){
+  pair = sample(Pairs,1)
+  lats = subset(hi_low_pairs_Mex,Pair == pair)$Lat
+  if(length(lats) < 2) print(lats)
+  
+  # select lines in band so they won't be > 1deg Lat from hi_low pair
+  candidate_lines = which(Mex_candidate_spdf$Elevation_class == 'Mid' & Mex_candidate_spdf$Lat > (max(lats)-1) & Mex_candidate_spdf$Lat < (min(lats)+1))
+  
+  # remove lines too close to already selected lines
+  dist_to_orig = apply(line_dist_Mex[Mex_candidate_spdf$ID[candidate_lines],c(hi_low_pairs_Mex$ID)],1,min)
+  dist_to_new = rep(Inf,length(candidate_lines))
+  if(length(new_lines) > 0) dist_to_new = apply(line_dist_Mex[Mex_candidate_spdf$ID[candidate_lines],c(new_lines$ID),drop=F],1,min)
+  
+  if(max(pmin(dist_to_orig,dist_to_new)) < min_dist) {
+    candidate_lines = candidate_lines[dist_to_orig > min_dist]
+    # drop the line from new_lines that is closest
+    dist_candidates_to_new = apply(line_dist_Mex[new_lines$ID,Mex_candidate_spdf$ID[candidate_lines],drop=F],1,min)
+    drop_line = order(dist_candidates_to_new)[1]
+    print(sprintf('Dropping %s',new_lines$Pair[drop_line]))
+    Pairs = c(Pairs,as.character(new_lines$Pair[drop_line]))
+    new_lines = new_lines[-drop_line,]
+    count = count + 1
+    if(count > 10) {
+      min_dist = min_dist * 0.95
+      count = 0
+    }
+  } else{
+  
+    candidate_lines = candidate_lines[pmin(dist_to_orig,dist_to_new) > min_dist]
+    
+    new_line = candidate_lines[sample(length(candidate_lines),1)]
+    new_lines = rbind(new_lines,data.frame(Mex_candidate_spdf@data[new_line,],Pair = pair))
+    Pairs = Pairs[Pairs != pair]
+    print(length(Pairs))
+  }
+}
+
+new_lines_Mex = merge(new_lines,SeeD_lines,by.x='ID',by.y = 'AccID',all.x=T,all.y=F)
+new_lines_Mex = new_lines_Mex[,!grepl('GRIN',colnames(new_lines_Mex))]
+new_lines_Mex = new_lines_Mex[,!grepl('.y',colnames(new_lines_Mex))]
+colnames(new_lines_Mex) = sub('.x','',colnames(new_lines_Mex))
+new_lines_Mex$Replaced_line = NA
+
+Mex_lines_lmh = rbind(hi_low_pairs_Mex,new_lines_Mex)
+Mex_lines_lmh = Mex_lines_lmh[order(Mex_lines_lmh$Pair,Mex_lines_lmh$Long),]
+
+ggplot(Mex_map,aes(x=long,y=lat)) + ggtitle('Low / High lines') +
+		geom_polygon(fill='white',aes(group=group)) + 
+		geom_polygon(data=Mex_exclude,alpha = .2) +
+    # geom_line(data=Mex_lines_lmh,aes(x=Long,y=Lat,group = Pair),size=.3) +
+		geom_point(data=Mex_lines_lmh,aes(x=Long,y=Lat,color=Elevation_class),size=1)
+
+ggplot(Mex_lines_lmh,aes(x=Lat)) + geom_density(aes(color=Elevation_class))
+
+write.csv(new_lines_Mex,file = 'Paired_Mid_lines_Mex.csv')
+
+```
+```{r}
+set.seed(1)
+hi_low_pairs_Mex = subset(selected_lines,grepl('Mex',Pair))
+new_lines = data.frame()
+Pairs = sample(unique(hi_low_pairs_Mex$Pair))
+# will keep trying until get a complete set
+min_dist = 25
+lat_range = 1
+missing_pairs = Pairs
+count = 0
+while(length(missing_pairs) > 0 & count < 10) {
+  # print(c(length(missing_pairs),lat_range))
+  for(pair in missing_pairs) {
+    lats = subset(hi_low_pairs_Mex,Pair == pair)$Lat
+    candidate_lines = which(Mex_candidate_spdf$Elevation_class == 'Mid' & Mex_candidate_spdf$Lat > (max(lats)-lat_range) & Mex_candidate_spdf$Lat < (min(lats)+lat_range))
+    
+    if(length(candidate_lines) == 0) next
+    
+    # remove lines too close to already selected lines
+    dist_to_orig = apply(line_dist_Mex[Mex_candidate_spdf$ID[candidate_lines],c(hi_low_pairs_Mex$ID),drop=F],1,min)
+    if(is.infinite(max(dist_to_orig))) break
+    dist_to_new = rep(Inf,length(candidate_lines))
+    if(length(new_lines) > 0 && nrow(new_lines) > 0) dist_to_new = apply(line_dist_Mex[Mex_candidate_spdf$ID[candidate_lines],c(new_lines$ID),drop=F],1,min)
+    
+    keep_candidates = pmin(dist_to_orig,dist_to_new) > min_dist
+    
+    if(sum(keep_candidates) == 0) next
+      
+    new_line = candidate_lines[keep_candidates][sample(sum(keep_candidates),1)]
+    
+    # break
+    new_lines = rbind(new_lines,data.frame(Mex_candidate_spdf@data[new_line,],Pair = pair))
+    missing_pairs = missing_pairs[missing_pairs != pair]
+    # print(length(Pairs))
+    print(dim(new_lines))
+  }
+  lat_range = lat_range + 0.1
+}
+
+new_lines_Mex = merge(new_lines,SeeD_lines,by.x='ID',by.y = 'AccID',all.x=T,all.y=F)
+new_lines_Mex = new_lines_Mex[,!grepl('GRIN',colnames(new_lines_Mex))]
+new_lines_Mex = new_lines_Mex[,!grepl('.y',colnames(new_lines_Mex))]
+colnames(new_lines_Mex) = sub('.x','',colnames(new_lines_Mex))
+new_lines_Mex$Replaced_line = NA
+
+Mex_lines_lmh = rbind(hi_low_pairs_Mex,new_lines_Mex)
+Mex_lines_lmh = Mex_lines_lmh[order(Mex_lines_lmh$Pair,Mex_lines_lmh$Elevation_class),]
+
+p = ggplot(Mex_map,aes(x=long,y=lat)) + ggtitle('Mex Low / Mid / High lines') +
+  		geom_polygon(fill='white',aes(group=group)) + 
+  		geom_polygon(data=Mex_exclude,alpha = .2) +
+      # geom_line(data=Mex_lines_lmh,aes(x=Long,y=Lat,group = Pair),size=.3) +
+  		geom_point(data=Mex_lines_lmh,aes(x=Long,y=Lat,color=Elevation_class),size=1)
+print(p)
+
+pdf('Mex_mid_lines.pdf')
+print(p)
+dev.off()
+
+ggplot(Mex_lines_lmh,aes(x=Lat)) + geom_density(aes(color=Elevation_class))
+
+write.csv(new_lines_Mex,file = 'Paired_Mid_lines_Mex.csv')
+
+dist_mat = line_dist_Mex[Mex_lines_lmh$ID,Mex_lines_lmh$ID]
+dist_mat = dist_mat[upper.tri(dist_mat,diag = F)]
+summary(dist_mat)
+```
+
+Now, repeat for SA:
+```{r}
+# pull out mid-elevation lines and add in selected lines info
+selected_lines = read.csv('Accession_selection_for_F1s_3_2_16.csv',stringsAsFactors = F)
+SA_map = map_data('world',regions = SA_regions)
+
+SA_candidate_spdf = SA_spdf[(SA_spdf$Elevation_class == 'Mid' & is.na(over(SA_spdf,SA_exclude))) | SA_spdf$ID %in% selected_lines$ID,]
+SA_candidate_spdf = SA_candidate_spdf[is.na(over(SA_candidate_spdf,SA_exclude)),]
+
+p = ggplot(SA_map,aes(x=long,y=lat,group=group)) + ggtitle('Low / High lines') +
+  		geom_polygon(fill='white') + 
+  		geom_polygon(data=SA_exclude,alpha = .2) +
+  		geom_point(data=SA_candidate_spdf@data,aes(x=Long,y=Lat,color=Elevation_class,group=1),size=.5)
+print(p)
+
+# pdf('SA_mid_lines.pdf')
+# print(p)
+# dev.off()
+
+line_dist_SA = distm(SA_candidate_spdf@data[,c('Long','Lat')],fun = distGeo)/1000 # to Km
+colnames(line_dist_SA) = rownames(line_dist_SA) = SA_candidate_spdf$ID
+```
+
+```{r}
+set.seed(1)
+hi_low_pairs_SA = subset(selected_lines,grepl('SA',Pair))
+new_lines = data.frame()
+Pairs = sample(unique(hi_low_pairs_SA$Pair))
+# will keep trying until get a complete set
+min_dist = 25
+lat_range = 1
+missing_pairs = Pairs
+count = 0
+while(length(missing_pairs) > 0) {
+  # print(c(length(missing_pairs),lat_range))
+  for(pair in missing_pairs) {
+    lats = subset(hi_low_pairs_SA,Pair == pair)$Lat
+    candidate_lines = which(SA_candidate_spdf$Elevation_class == 'Mid' & SA_candidate_spdf$Lat > (max(lats)-lat_range) & SA_candidate_spdf$Lat < (min(lats)+lat_range))
+    
+    if(length(candidate_lines) == 0) next
+    
+    # remove lines too close to already selected lines
+    dist_to_orig = apply(line_dist_SA[SA_candidate_spdf$ID[candidate_lines],c(hi_low_pairs_SA$ID),drop=F],1,min)
+    if(is.infinite(max(dist_to_orig))) break
+    dist_to_new = rep(Inf,length(candidate_lines))
+    if(length(new_lines) > 0 && nrow(new_lines) > 0) dist_to_new = apply(line_dist_SA[SA_candidate_spdf$ID[candidate_lines],c(new_lines$ID),drop=F],1,min)
+    
+    keep_candidates = pmin(dist_to_orig,dist_to_new) > min_dist
+    
+    if(sum(keep_candidates) == 0) next
+      
+    new_line = candidate_lines[keep_candidates][sample(sum(keep_candidates),1)]
+    
+    # break
+    new_lines = rbind(new_lines,data.frame(SA_candidate_spdf@data[new_line,],Pair = pair))
+    missing_pairs = missing_pairs[missing_pairs != pair]
+    # print(length(Pairs))
+    print(dim(new_lines))
+  }
+  # if not successful, increase the lat_range slightly
+  lat_range = lat_range + 0.1
+}
+
+new_lines_SA = merge(new_lines,SeeD_lines,by.x='ID',by.y = 'AccID',all.x=T,all.y=F)
+new_lines_SA = new_lines_SA[,!grepl('GRIN',colnames(new_lines_SA))]
+new_lines_SA = new_lines_SA[,!grepl('.y',colnames(new_lines_SA))]
+colnames(new_lines_SA) = sub('.x','',colnames(new_lines_SA))
+new_lines_SA$Replaced_line = NA
+
+SA_lines_lmh = rbind(hi_low_pairs_SA,new_lines_SA)
+SA_lines_lmh = SA_lines_lmh[order(SA_lines_lmh$Pair,SA_lines_lmh$Elevation_class),]
+
+p = ggplot(SA_map,aes(x=long,y=lat)) + ggtitle('SA Low / Mid / High lines') +
+		geom_polygon(fill='white',aes(group=group)) + 
+		geom_polygon(data=SA_exclude,alpha = .2) +
+    # geom_line(data=SA_lines_lmh,aes(x=Long,y=Lat,group = Pair),size=.3) +
+		geom_point(data=SA_lines_lmh,aes(x=Long,y=Lat,color=Elevation_class),size=1)
+print(p)
+pdf('SA_mid_lines.pdf')
+print(p)
+dev.off()
+
+ggplot(SA_lines_lmh,aes(x=Lat)) + geom_density(aes(color=Elevation_class))
+
+write.csv(new_lines_SA,file = 'Paired_Mid_lines_SA.csv')
+
+dist_mat = line_dist_SA[SA_lines_lmh$ID,SA_lines_lmh$ID]
+dist_mat = dist_mat[upper.tri(dist_mat,diag = F)]
+summary(dist_mat)
+```
