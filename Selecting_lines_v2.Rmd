@@ -235,7 +235,7 @@ Mex_candidate_spdf = Mex_candidate_spdf[is.na(over(Mex_candidate_spdf,Mex_exclud
 ggplot(Mex_map,aes(x=long,y=lat,group=group)) + ggtitle('Low / High lines') +
 		geom_polygon(fill='white') + 
 		geom_polygon(data=Mex_exclude,alpha = .2) +
-		geom_point(data=Mex_candidate_spdf@data,aes(x=Long,y=Lat,color=interaction(Elevation_class),group=1),size=.5)
+		geom_point(data=Mex_candidate_spdf@data,aes(x=Long,y=Lat,color=Elevation_class,group=1),size=.5)
 
 line_dist_Mex = distm(Mex_candidate_spdf@data[,c('Long','Lat')],fun = distGeo)/1000 # to Km
 ```
@@ -316,8 +316,7 @@ select_lines = function(allLines_spdf,line_dist,min_Dist = 50,lat_range = 0.5,ta
 
 ### Select Mex lines
 ```{r}
-
-# pdf('Accession_selection_for_F1s.pdf')
+pdf('F1_lines_Mex_map.pdf',width=8,height=6)
 set.seed(1)
 
 targetNumber_Mex = 30
@@ -332,16 +331,19 @@ paired_lines = cbind(Mex_lines@data[1:n,c('Long','Lat')],Mex_lines@data[n+1:n,c(
 colnames(paired_lines)[3:4] = c('Long2','Lat2')
 
 summary(Mex_lines$Elevation_class)
-ggplot() + ggtitle('Central America') + #xlim(range(Mex_map$long)) + ylim(range(Mex_map$lat)) +
+ggplot() + ggtitle('Central America') +  coord_fixed() +#xlim(range(Mex_map$long)) + ylim(range(Mex_map$lat)) +
 		geom_polygon(data=Mex_map,aes(x=long,y=lat,group=group),fill='white') + 
-		geom_point(data = Mex_candidate_spdf@data,aes(x=Long,y=Lat,color = interaction(Elevation_class)),size = .2,alpha = .05) +
+		geom_point(data=Mex_spdf@data,aes(x=Long,y=Lat,color=Elevation_class,group=1),size=.3,alpha = 0.05) + 
+		# geom_point(data = Mex_candidate_spdf@data,aes(x=Long,y=Lat,color = Elevation_class),size = .2,alpha = .05) +
 		# geom_segment(data = paired_lines,aes(x = Long,y=Lat,xend=Long2,yend = Lat2),size=.1) 
 		geom_point(data=Mex_lines@data,aes(x=Long,y=Lat),color='black',size=1.2)+
 		geom_point(data=Mex_lines@data,aes(x=Long,y=Lat,color=interaction(Elevation_class)),size=2)
+dev.off()
 ```
 
 ### Select SA lines
 ```{r}
+pdf('F1_lines_SA_map.pdf',width=8,height=6)
 set.seed(10)
 
 targetNumber_SA = 30
@@ -358,13 +360,14 @@ paired_lines = cbind(SA_lines@data[1:n,c('Long','Lat')],SA_lines@data[n+1:n,c('L
 colnames(paired_lines)[3:4] = c('Long2','Lat2')
 
 summary(SA_lines$Elevation_class)
-ggplot() + ggtitle('South America') +
+ggplot() + ggtitle('South America') + coord_fixed() +
 		geom_polygon(data=SA_map_mod,aes(x=long,y=lat,group=group),fill='white') + 
-		geom_point(data = SA_candidate_spdf@data,aes(x=Long,y=Lat,color = interaction(Elevation_class)),size = .2,alpha = .05) +
+		geom_point(data=SA_spdf@data,aes(x=Long,y=Lat,color=Elevation_class,group=1),size=.3,alpha = 0.05) + 
+		# geom_point(data = SA_candidate_spdf@data,aes(x=Long,y=Lat,color = interaction(Elevation_class)),size = .2,alpha = .05) +
 		# geom_segment(data = paired_lines,aes(x = Long,y=Lat,xend=Long2,yend = Lat2),size=.1) 
 		geom_point(data=SA_lines@data,aes(x=Long,y=Lat),color='black',size=1.2)+
-		geom_point(data=SA_lines@data,aes(x=Long,y=Lat,color=interaction(Elevation_class)),size=2) + xlim(SA_xlim) + ylim(SA_ylim)
-# dev.off()
+		geom_point(data=SA_lines@data,aes(x=Long,y=Lat,color=Elevation_class),size=2) + xlim(SA_xlim) + ylim(SA_ylim)
+dev.off()
 ```
 
 ## Save lines in a DF
