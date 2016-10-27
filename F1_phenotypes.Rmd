@@ -1,0 +1,131 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Download phenotypes from Sherry, Met, PV
+
+```{r}
+library("googlesheets")
+suppressPackageStartupMessages(library("dplyr"))
+
+# Load each dataset
+PV_data <- data.frame(gs_read(gs_title('common_garden2016'),ws='PV_OPVs'))
+Met_data <- data.frame(gs_read(gs_title('common_garden2016'),ws='Met_OPVs'))
+Sherry_data <- data.frame(gs_read(gs_title('LR-B73 Cross Status')))
+
+field_info = data.frame(gs_read(gs_title('common_garden2016'),ws='Original 2016 Fields Info'),skip=3)
+```
+
+collect data
+
+```{r}
+library(reshape)
+data = Sherry_data[,c('ID','Pedigree','Pair','NvS','num','Long','Lat','Elevation','Race','bank_number','collnumb','colldate','CIMMYT_ID','SeeD_Elevation','Poll.Date')]
+data$Poll.Date[data$Poll.Date == "9-26-16"] = '09-Sept'
+data$Poll.Date = as.numeric(as.Date(data$Poll.Date,format = '%d-%b') - as.Date('2015-12-31'))
+data$Elevation_class = sapply(data$Pedigree,function(x) strsplit(x,'-')[[1]][2])
+
+field_info = field_info[!is.na(field_info$Who.What) & field_info$Who.What == 'GARRETT',]
+PV_data$ID = field_info$Female.parent[match(PV_data$Plot,field_info$RS16.)]
+Met_data$ID = field_info$Female.parent[match(Met_data$Plot,field_info$RS16.)]
+
+sum_fun = function(x) {
+  x_num = suppressWarnings(as.numeric(x))
+  if(sum(!is.na(x_num))>0) return(mean(x_num,na.rm=T))
+  x_date = suppressWarnings(as.numeric(as.Date(x,format = '%m-%d-%y') - as.Date('2015-12-31')))
+  if(sum(!is.na(x_date))>0) return(mean(x_date,na.rm=T))
+  if(length(unique(x))>1) return(NA)
+  return(x[1])
+}
+
+PV_data = subset(PV_data, Plot %in% field_info$RS16.)
+PV_data_wide = cast(PV_data,ID ~ Trait,value = 'Trait.Value',fun.aggregate = sum_fun)
+colnames(PV_data_wide)[-1] = paste('PV',colnames(PV_data_wide)[-1],sep='_')
+PV_data_wide[,-1] = apply(PV_data_wide[,-1],2,function(x) as.numeric(as.character(x)))
+
+Met_data = subset(Met_data, Plot %in% field_info$RS16.)
+Met_data_wide = cast(Met_data,ID ~ Trait,value = 'Trait.Value',fun.aggregate = sum_fun)
+colnames(Met_data_wide)[-1] = paste('Met',colnames(Met_data_wide)[-1],sep='_')
+Met_data_wide[,-1] = apply(Met_data_wide[,-1],2,function(x) as.numeric(as.character(x)))
+
+data = merge(data,PV_data_wide,by='ID')
+data = merge(data,Met_data_wide,by='ID')
+```
+
+```{r}
+datacols = c(15,17:18,20:34,36:38)
+
+std_data = data
+std_data[,datacols] = apply(std_data[,datacols],2,function(x) (x-mean(x,na.rm=T))/sd(x,na.rm=T))
+
+tall_std_data = melt(std_data,id.vars = colnames(data)[-datacols],measure.vars = colnames(data)[datacols])
+tall_data = melt(data,id.vars = colnames(data)[-datacols],measure.vars = colnames(data)[datacols])
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(tall_std_data,aes(x=variable,y=value)) + geom_line(aes(group = ID,color = interaction(Elevation_class,NvS)))
+ggplot(tall_std_data,aes(x=variable,y=value)) + geom_boxplot(aes(color = interaction(Elevation_class,NvS)))
+```
+
+```{r}
+library(lmerTest)
+x = tall_std_data$variable == 'PV_Early Leaf Number'
+
+traits = unique(tall_std_data$variable)
+pop_results = array(0,dim = c(3,2,length(traits)))
+pop_results_lm = array(0,dim = c(3,2,length(traits)))
+
+for(trait in traits){
+  lme1 = lmer(value ~ NvS*Elevation_class + (1|Pair),subset(tall_std_data,variable == trait))
+  pop_results[,,match(trait,traits)] = summary(lme1)$coef[-1,c(1,5)]
+  lm1 = lm(value ~ NvS*Elevation_class,subset(tall_std_data,variable == trait))
+  pop_results_lm[,,match(trait,traits)] = summary(lm1)$coef[-1,c(1,4)]
+}
+dimnames(pop_results)[[3]] = dimnames(pop_results_lm)[[3]] = traits
+dimnames(pop_results)[1:2] = dimnames(pop_results_lm)[1:2] = dimnames(summary(lme1)$coef[-1,c(1,5)])
+```
+
+NvS:SA
+```{r}
+t(pop_results[1,,order(pop_results[1,2,])])
+```
+
+Elevation_classLow
+```{r}
+t(pop_results[2,,order(pop_results[2,2,])])
+```
+
+NvSSA:Elevation_classLow
+```{r}
+t(pop_results[3,,order(pop_results[3,2,])])
+```
+```{r}
+traits = c('PV_M Density','PV_Pigment Intensity','Met_Early Plant Height','PV_M Pattern','PV_Tassel Date','Poll.Date')
+traits = dimnames(pop_results)[[3]][order(pop_results[2,1,])]
+tall_std_data$variable = factor(tall_std_data$variable,levels = traits) 
+traits = traits[pop_results[2,2,traits] < 1e-2]
+ggplot(subset(tall_data,variable %in% traits),aes(x=NvS,y=value)) + geom_boxplot(aes(color = Elevation_class)) + facet_wrap(~variable,scales = 'free')
+ggplot(subset(tall_std_data,variable %in% traits),aes(x=variable,y=value)) + 
+        geom_line(aes(group = ID,color = Elevation_class)) + facet_wrap(~NvS) +
+        geom_line(data = subset(tall_std_data,variable %in% traits & Elevation_class == 'High' & Pair == 'Mex_14'),aes(group = ID),size=2,color='green') +
+        geom_point(data = subset(tall_std_data,variable %in% traits & Elevation_class == 'High' & Pair == 'Mex_14'),aes(group = ID),size=2,color='green') +
+        theme(axis.text.x = element_text(hjust = 1,angle = 70))
+```
+
+```{r}
+require(MASS)
+Mex_data = subset(std_data,NvS == 'Mex')
+r = lda(Elevation_class ~ .,data = Mex_data[,c('Elevation_class',colnames(data)[datacols])],CV=T)
+r$class == Mex_data$Elevation_class
+
+Mex_data$pred_class = NA
+Mex_data$pred_class[match(rownames(r$posterior),rownames(Mex_data))] = r$posterior[,1]
+with(Mex_data,boxplot(pred_class ~ Elevation_class))
+Mex_data[order(Mex_data$pred_class),c('Elevation','Elevation_class','pred_class','SeeD_Elevation','colldate')]
+# with(Mex_data,plot(jitter(as.numeric(Elevation_class)),pred_class))
+
+```
+

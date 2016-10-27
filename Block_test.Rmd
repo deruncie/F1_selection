@@ -1,0 +1,33 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+library(lmerTest)
+library(parallel)
+
+nBlocks = 12
+data = data.frame(Trt =rep(c('A','B'),nBlocks),Block = factor(rep(1:nBlocks,each = 2)),Block2 = factor(rep(1:8,each=3)))
+
+
+r = mclapply(1:10000,function(x) {
+  b = 0*rnorm(nBlocks,0,1)
+  b2 = 5*rnorm(8,0,1)
+  t = 0*c(A=0,B=1)
+  data$y = t[data$Trt] + b[data$Block] + b2[data$Block2] + rnorm(nrow(data))
+  
+  lm1 = lm(y~Trt + Block,data)
+  # lme1 = lmer(y~Trt + (1|Block),data)
+  
+  lm1b = lm(y~Trt,data)
+  return(c(anova(lm1)$Pr[1],anova(lm1b)$Pr[1]))
+  # return(c(anova(lm1)$Pr[1],anova(lm1b)$Pr[1],anova(lme1)$Pr[1]))
+},mc.cores = detectCores())
+r = do.call(rbind,r)
+
+colMeans(r<0.05)
+
+
+
+```
+
