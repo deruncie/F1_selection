@@ -1,0 +1,514 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+**Goal:** choose F1 families from SFG or MBH based on successful pairs, and then produce randomization for Metepec and PV
+
+Download data from Matt
+
+```{r}
+library("googlesheets")
+suppressPackageStartupMessages(library("dplyr"))
+
+# Load each dataset
+F1_data <- data.frame(gs_read(gs_title('LR-B73 Cross Status')))
+head(F1_data)
+colnames(F1_data)[colnames(F1_data) == 'Successful.'] = 'SFG_Success'
+colnames(F1_data)[colnames(F1_data) == 'Successful._1'] = 'MBH_Success'
+colnames(F1_data)
+```
+
+```{r}
+summary(factor(F1_data$SFG_Success))
+F1_data$SFG_Success_mod = c('No','Yes')[(grepl('yes',F1_data$SFG_Success) & !grepl('mold',F1_data$SFG_Success) & !grepl('GH',F1_data$SFG_Success))+1]
+summary(factor(F1_data$SFG_Success_mod))
+SFG_pair_success = tapply(F1_data$SFG_Success == 'yes',F1_data$Pair,sum)
+SFG_pairs_Mex = names(SFG_pair_success)[grepl('Mex',names(SFG_pair_success)) & SFG_pair_success == 2]
+SFG_pairs_SA  = names(SFG_pair_success)[grepl('SA',names(SFG_pair_success))  & SFG_pair_success == 2]
+
+summary(factor(F1_data$MBH_Success))
+MBH_pair_success = tapply(F1_data$MBH_Success == 'Yes',F1_data$Pair,sum)
+MBH_pairs_Mex = names(MBH_pair_success)[grepl('Mex',names(MBH_pair_success)) & MBH_pair_success == 2]
+MBH_pairs_SA  = names(MBH_pair_success)[grepl('SA',names(MBH_pair_success))  & MBH_pair_success == 2]
+
+length(SFG_pairs_Mex)
+length(MBH_pairs_Mex)
+length(unique(c(SFG_pairs_Mex,MBH_pairs_Mex)))
+
+length(SFG_pairs_SA)
+length(MBH_pairs_SA)
+length(unique(c(SFG_pairs_SA,MBH_pairs_SA)))
+
+successful_pairs = unique(c(SFG_pairs_Mex,MBH_pairs_Mex,SFG_pairs_SA,MBH_pairs_SA))
+```
+
+```{r}
+require(ggplot2)
+F1_data$Poll.Date[F1_data$Poll.Date == '9-26-16' & !is.na(F1_data$Poll.Date)] = '26-Sept'
+F1_data$SFG_PollDate = as.Date(F1_data$Poll.Date,format = '%d-%b')
+ggplot(F1_data,aes(x = NvS,y = SFG_PollDate)) + geom_boxplot(aes(color = Elevation_class))
+with(subset(F1_data[order(F1_data$Elevation_class),],NvS == 'Mex' & Pair %in% c(SFG_pairs_Mex,SFG_pairs_SA)),hist(tapply(SFG_PollDate,Pair,function(x) x[2]-x[1]),main = 'Mex',xlab = 'Low Poll - High Poll'))
+with(subset(F1_data[order(F1_data$Elevation_class),],NvS == 'SA' & Pair %in% c(SFG_pairs_Mex,SFG_pairs_SA)),hist(tapply(SFG_PollDate,Pair,function(x) x[2]-x[1]),main = 'SA',xlab = 'Low Poll - High Poll'))
+```
+
+
+
+```{r}
+library(ggplot2)
+library(sp)
+library(maps)
+library(maptools)
+library(mapdata)
+library(Grid2Polygons)
+SA_regions = c('Colombia','Ecuador','Peru','Bolivia','Chile','Argentina','Venezuela')
+Mex_regions = c('Belize','Guatemala','Honduras','Mexico','El Salvador') #,'Nicaragua','Costa Rica','Panama'
+
+ROI_map = map('world',regions = c(Mex_regions,SA_regions),fill=T,plot=F)
+
+ROI_polygons <- map2SpatialPolygons(ROI_map, IDs=ROI_map$names)
+
+Mex_map = map('world',regions = Mex_regions,fill=T,plot=F)
+
+SA_map = map('world',regions = SA_regions,fill=T,plot=F)
+```
+
+```{r}
+ggplot(Mex_map,aes(x=long,y=lat,group=group)) + ggtitle('All Available lines') + coord_fixed(ratio = 1) +
+		geom_polygon(fill='white') + 
+		geom_point(data=subset(F1_data,grepl('Mex',Pair) & Pair %in% SFG_pairs_Mex),aes(x=Long,y=Lat,color=Elevation_class,group=1),size=2) + 
+		geom_point(data=subset(F1_data,grepl('Mex',Pair) & !(Pair %in% successful_pairs) & (SFG_Success_mod == 'Yes' | MBH_Success == 'Yes')),aes(x=Long,y=Lat,color=Elevation_class,group=1),size=.5)
+
+ggplot(Mex_map,aes(x=long,y=lat,group=group)) + ggtitle('All Available lines') + coord_fixed(ratio = 1) +
+		geom_polygon(fill='white') + 
+		geom_point(data=subset(F1_data,grepl('Mex',Pair) & Pair %in% MBH_pairs_Mex),aes(x=Long,y=Lat,color=Elevation_class,group=1),size=2) + 
+		geom_point(data=subset(F1_data,grepl('Mex',Pair) & !(Pair %in% successful_pairs) & (SFG_Success_mod == 'Yes' | MBH_Success == 'Yes')),aes(x=Long,y=Lat,color=Elevation_class,group=1),size=.5)
+
+
+ggplot(SA_map,aes(x=long,y=lat,group=group)) + ggtitle('All Available lines') + coord_fixed(ylim=c(-30,10),ratio = 1,xlim = c(-85,-55)) +
+		geom_polygon(fill='white') + 
+		geom_point(data=subset(F1_data,grepl('SA',Pair) & Pair %in% SFG_pairs_SA),aes(x=Long,y=Lat,color=Elevation_class,group=1),size=2) + 
+		geom_point(data=subset(F1_data,grepl('SA',Pair) & !(Pair %in% successful_pairs) & (SFG_Success_mod == 'Yes' | MBH_Success == 'Yes')),aes(x=Long,y=Lat,color=Elevation_class,group=1),size=.5)
+
+ggplot(SA_map,aes(x=long,y=lat,group=group)) + ggtitle('All Available lines') + coord_fixed(ylim=c(-30,10),ratio = 1,xlim = c(-85,-55)) +
+		geom_polygon(fill='white') + 
+		geom_point(data=subset(F1_data,grepl('SA',Pair) & Pair %in% MBH_pairs_SA),aes(x=Long,y=Lat,color=Elevation_class,group=1),size=2) + 
+		geom_point(data=subset(F1_data,grepl('SA',Pair) & !(Pair %in% successful_pairs) & (SFG_Success_mod == 'Yes' | MBH_Success == 'Yes')),aes(x=Long,y=Lat,color=Elevation_class,group=1),size=.5)
+
+```
+
+```{r}
+unpaired_F1s_Mex = subset(F1_data,grepl('Mex',Pair) & !(Pair %in% successful_pairs) & (SFG_Success == 'yes' | MBH_Success == 'Yes'))
+unpaired_F1s_Mex[,c('Pedigree','SFG_Success','MBH_Success','Lat','Long','Elevation_class')]
+
+ggplot(Mex_map,aes(x=long,y=lat,group=group)) + ggtitle('All Available lines') + coord_fixed(ratio = 1) +
+		geom_polygon(fill='white') + 
+		# geom_point(data=subset(F1_data,grepl('Mex',Pair) & Pair %in% successful_pairs),aes(x=Long,y=Lat,color=Elevation_class,group=1),size=2) + 
+		geom_point(data=unpaired_F1s_Mex,aes(x=Long,y=Lat,color=Elevation_class,group=1),size=.5)
+
+new_pair_Mex = rbind(unpaired_F1s_Mex[unpaired_F1s_Mex$Pedigree == 'Mex_2-High',],unpaired_F1s_Mex[unpaired_F1s_Mex$Pedigree == 'Mex_27-Low',])
+new_pair_Mex$Pair = 'Mex_31'
+new_pair_Mex$Source = ''
+
+```
+
+```{r}
+unpaired_F1s_SA = subset(F1_data,grepl('SA',Pair) & !(Pair %in% successful_pairs) & ((grepl('yes',F1_data$SFG_Success) & !grepl('mold',F1_data$SFG_Success) & !grepl('GH',F1_data$SFG_Success)) | MBH_Success == 'Yes'))
+unpaired_F1s_SA = unpaired_F1s_SA[order(unpaired_F1s_SA$Lat),]
+unpaired_F1s_SA[,c('Pedigree','SFG_Success','MBH_Success','Lat','Long','Elevation_class')]
+
+ggplot(SA_map,aes(x=long,y=lat,group=group)) + ggtitle('All Available lines') + coord_fixed(ylim=c(-30,10),ratio = 1,xlim = c(-85,-55)) +
+		geom_polygon(fill='white') + 
+		# geom_point(data=subset(F1_data,grepl('SA',Pair) & Pair %in% successful_pairs),aes(x=Long,y=Lat,color=Elevation_class,group=1),size=2) + 
+		geom_point(data=unpaired_F1s_SA,aes(x=Long,y=Lat,color=Elevation_class,group=1),size=.5)
+
+new_pairs_SA = c()
+
+new_pair_SA = rbind(F1_data[F1_data$Pedigree == 'SA_6-Low',],F1_data[F1_data$Pedigree == 'SA_6-High',])
+new_pair_SA$Source = c('SFG','SFG')
+new_pairs_SA = rbind(new_pairs_SA,new_pair_SA)
+
+new_pair_SA = rbind(F1_data[F1_data$Pedigree == 'SA_21-Low',],F1_data[F1_data$Pedigree == 'SA_21-High',])
+new_pair_SA$Source = c('SFG','SFG')
+new_pairs_SA = rbind(new_pairs_SA,new_pair_SA)
+
+new_pair_SA = rbind(F1_data[F1_data$Pedigree == 'SA_18-Low',],F1_data[F1_data$Pedigree == 'SA_13-High',])
+new_pair_SA$Pair = 'SA_32'
+new_pair_SA$Source = c('SFG','SFG')
+new_pairs_SA = rbind(new_pairs_SA,new_pair_SA)
+
+# note below: SA_16-High used instead of SA_10-High
+new_pair_SA = rbind(F1_data[F1_data$Pedigree == 'SA_16-High',],F1_data[F1_data$Pedigree == 'SA_10-Low',])
+new_pair_SA$Pair = 'SA_33'
+new_pair_SA$Source = c('SFG','SFG')
+new_pairs_SA = rbind(new_pairs_SA,new_pair_SA)
+
+new_pair_SA = rbind(F1_data[F1_data$Pedigree == 'SA_22-Low',],F1_data[F1_data$Pedigree == 'SA_22-High',])
+new_pair_SA$Source = c('SFG','MBH')
+new_pairs_SA = rbind(new_pairs_SA,new_pair_SA)
+
+new_pair_SA = rbind(F1_data[F1_data$Pedigree == 'SA_26-Low',],F1_data[F1_data$Pedigree == 'SA_26-High',])
+new_pair_SA$Source = c('SFG','MBH')
+new_pairs_SA = rbind(new_pairs_SA,new_pair_SA)
+new_pairs_SA[,c('Pedigree','Pair','Source','SFG_Success','MBH_Success','Lat','Long','Elevation_class')]
+```
+```{r}
+all_pairs = unique(c(successful_pairs, new_pair_Mex$Pair,new_pairs_SA$Pair))
+paired_lines = subset(F1_data,Pair %in% c(successful_pairs, new_pair_Mex$Pair,new_pairs_SA$Pair))
+sort(unique(paired_lines$Pair))
+```
+
+
+**New randomization based on the F1 changes by Matt**
+
+```{r}
+set.seed(1)
+require(readxl)
+LR_seed_sources = as.data.frame(read_excel('LR_notes.xlsx'),strip.white=T)
+LR_seed_sources$new_Pair = trimws(LR_seed_sources$new_Pair)
+
+
+# good_pairs = LR_seed_sources$new_Pair[!is.na(LR_seed_sources$new_Pair)]
+# other_lines = LR_seed_sources$new_Line[!is.na(LR_seed_sources$new_Line)]
+
+pair_sources = subset(LR_seed_sources,!is.na(LR_seed_sources$new_Pair))
+other_sources = subset(LR_seed_sources,!is.na(LR_seed_sources$new_Line))
+other_sources$new_Pair = rep(c('SA_26','SA_22','SA_33'),each = 2)
+other_sources$new_Line = paste(other_sources$new_Pair,c('Low','High')[grepl('High',other_sources$Pair)+1])
+
+pair_sources = merge(pair_sources,data.frame(new_Source = 'Mix',new_Pair = unique(other_sources$new_Pair)),all=T)
+
+pair_sources$NvS = c('Mex','SA')[grepl('SA',pair_sources$new_Pair)+1]
+pair_sources$Type = with(pair_sources,paste(NvS,new_Source,sep='_'))
+
+# Mex_pairs = subset(pair_sources,grepl('Mex',new_Pair))
+# SA_pairs = subset(pair_sources,grepl('SA',new_Pair))
+
+
+randomize_pairs = c()  
+for(field in c('Metepec','PV')){
+  for(rep in 1:2){
+    blocks = sample(1:6)
+    # blocks = 1:6
+    rand_rep = with(pair_sources,data.frame(Pair = new_Pair,Source = new_Source,NvS = NvS, Type = Type))
+    
+    Mex_MBH_blocks = blocks[c(rep(1:4,each = 3),rep(5:6,each = 2))]   # 3 MBH_Mex in blocks 1:4, 2 in blocks 5:6
+    Mex_SFG_blocks = blocks[rep(1:6,each = 2)]  # 2 SFG_Mex in all 6 blocks
+    
+    SA_MBH_blocks = blocks[c(1:4,rep(5:6,each = 2))] # 1 MBH_SA in blocks 1:4, 2 in blocks 5:6
+    SA_SFG_blocks = blocks[rep(2:6,each = 3)] # 3 SFG_SA in blocks 2:6
+    SA_Mix_blocks = blocks[rep(1,3)] # all three Mix_SA in block 1
+    
+    rand_rep$Block = NA
+    rand_rep$Block[with(rand_rep,which(Type == 'Mex_MBH'))] = sample(Mex_MBH_blocks)
+    rand_rep$Block[with(rand_rep,which(Type == 'Mex_SFG'))] = sample(Mex_SFG_blocks)
+    rand_rep$Block[with(rand_rep,which(Type == 'SA_MBH'))]  = sample(SA_MBH_blocks)
+    rand_rep$Block[with(rand_rep,which(Type == 'SA_SFG'))]  = sample(SA_SFG_blocks)
+    rand_rep$Block[with(rand_rep,which(Type == 'SA_Mix'))]  = sample(SA_Mix_blocks)
+    
+    rand_rep = merge(rand_rep,data.frame(Pair = 'Check',Source = 'SFG_Check',Block = blocks),all=T)
+    rand_rep$order_in_block = runif(nrow(rand_rep))
+    rand_rep = rand_rep[order(rand_rep$Block,rand_rep$order_in_block),]
+    rand_rep$order_in_block = 1:nrow(rand_rep)
+    rand_rep$Field = field
+    rand_rep$Rep = rep
+    randomize_pairs = rbind(randomize_pairs,rand_rep) 
+  }
+}
+    
+# now split each pair into two lines - high and low - and randomize which comes first
+randomize_rows = randomize_pairs[rep(1:nrow(randomize_pairs),each = 2),]
+randomize_rows$Elevation_class = c(sapply(1:nrow(randomize_pairs),function(x) sample(c('High','Low'))))
+randomize_rows$Pedigree = with(randomize_rows,paste(Pair,Elevation_class,sep='-'))
+randomize_rows$Row = 1:(nrow(randomize_rows)/4)
+
+# for the mixed pairs, assign the correct seed source
+randomize_rows$Source[randomize_rows$Source == 'Mix'] = other_sources$new_Source[match(with(randomize_rows[randomize_rows$Source == 'Mix',],paste(Pair,Elevation_class)),other_sources$new_Line)]
+
+
+aug_F1_data = rbind(data.frame(F1_data,Source = NA),new_pair_Mex,new_pairs_SA)
+aug_F1_data$Pedigree = with(aug_F1_data,paste(Pair,Elevation_class,sep='-'))
+
+randomize_rows$success[randomize_rows$Source == 'SFG'] = aug_F1_data$SFG_Success[match(randomize_rows$Pedigree[randomize_rows$Source == 'SFG'],aug_F1_data$Pedigree)]
+randomize_rows$success[randomize_rows$Source == 'MBH'] = aug_F1_data$MBH_Success[match(randomize_rows$Pedigree[randomize_rows$Source == 'MBH'],aug_F1_data$Pedigree)]
+randomize_rows$ID = aug_F1_data$ID[match(randomize_rows$Pedigree,aug_F1_data$Pedigree)]
+
+randomize_rows$old_Pedigree = F1_data$Pedigree[match(randomize_rows$ID,F1_data$ID)]
+randomize_rows$old_Pedigree[randomize_rows$old_Pedigree == randomize_rows$Pedigree] = ''
+
+randomize_rows$Mixed_source = c('','Yes')[with(randomize_rows,tapply(Source,Pair,function(x) x[2]!=x[1]))[randomize_rows$Pair]+1]
+
+write.csv(randomize_rows[,c('Field','Rep','Row','Pedigree','old_Pedigree','Mixed_source','Source','ID','Block','Pair','Elevation_class')],file = 'F1_seed_randomization_v2.csv',row.names=F)
+```
+
+
+
+Checking . . .
+```{r}
+with(subset(randomize_rows,Source == 'SFG'),table(Block,grepl('Mex',Pair),Field,Rep))
+with(subset(randomize_rows,Source == 'MBH'),table(Block,grepl('Mex',Pair),Field,Rep))
+apply(with(subset(randomize_rows),table(Block,Pair,Field,Rep))>0,c(2,3),colSums)
+with(subset(randomize_rows,Elevation_class == 'Low'),table(Block,Row,Field,Rep))
+with(subset(randomize_rows,Elevation_class == 'High'),table(Block,order_in_block,Field,Rep))
+with(randomize_rows,table(Block,Pair,Field,Rep))
+with(randomize_rows,table(Block,Rep,order_in_block,Field))
+with(randomize_rows,table(Block,Rep,Field,order_in_block))
+with(randomize_rows,table(Block,Rep,Field))
+```
+
+**Selecting Pairs for randomization - Used**
+
+Randomization rules: 
+- divide field into two reps
+- within rep, 6 blocks
+- within blocks, 8 pairs + 2 checks = 18 rows
+    - 4 Mex and 4 SA pairs
+    - 2 Mex pairs from Iowa, 2 from Missouri
+
+Alterations:
+- Block 6: SA pairs from new_pairs_SA (1 re-paired set from Missouri, 3 pairs mixed from Iowa, Missouri)
+- Final Block 7: 4 additional Mex pairs (including 1 re-pair)
+
+
+```{r}
+set.seed(3)  # fix seed 
+
+# pull out lines from SFG and MBH
+
+# Mex
+Mex_pairs_left = unique(SFG_pairs_Mex,MBH_pairs_Mex)
+Mex_pairs_left = Mex_pairs_left[Mex_pairs_left != 'Mex_14']
+
+SFG_pairs_Mex_selected = SFG_pairs_Mex[SFG_pairs_Mex %in% MBH_pairs_Mex == F]
+MBH_pairs_Mex_selected = MBH_pairs_Mex[MBH_pairs_Mex %in% SFG_pairs_Mex == F & MBH_pairs_Mex != 'Mex_14']
+Mex_pairs_left = Mex_pairs_left[!(Mex_pairs_left %in% c(SFG_pairs_Mex_selected,MBH_pairs_Mex_selected))]
+
+SFG_pairs_Mex_selected = c(SFG_pairs_Mex_selected,sample(Mex_pairs_left,12-length(SFG_pairs_Mex_selected),replace=F))
+Mex_pairs_left = Mex_pairs_left[!(Mex_pairs_left %in% c(SFG_pairs_Mex_selected,MBH_pairs_Mex_selected))]
+
+MBH_pairs_Mex_selected = c(MBH_pairs_Mex_selected,sample(Mex_pairs_left,12-length(MBH_pairs_Mex_selected),replace=F))
+Mex_pairs_left = Mex_pairs_left[!(Mex_pairs_left %in% c(SFG_pairs_Mex_selected,MBH_pairs_Mex_selected))]
+
+Mex_pairs_left = c('Mex_14','Mex_31',Mex_pairs_left)
+
+
+
+# SA
+SA_pairs_left = unique(SFG_pairs_SA,MBH_pairs_SA)
+
+SFG_pairs_SA_selected = SFG_pairs_SA[SFG_pairs_SA %in% MBH_pairs_SA == F]
+MBH_pairs_SA_selected = MBH_pairs_SA[MBH_pairs_SA %in% SFG_pairs_SA == F & MBH_pairs_SA != 'SA_14']
+SA_pairs_left = SA_pairs_left[!(SA_pairs_left %in% c(SFG_pairs_SA_selected,MBH_pairs_SA_selected))]
+
+SFG_pairs_SA_selected = c(SFG_pairs_SA_selected,sample(SA_pairs_left,10-length(SFG_pairs_SA_selected),replace=F))
+SA_pairs_left = SA_pairs_left[!(SA_pairs_left %in% c(SFG_pairs_SA_selected,MBH_pairs_SA_selected))]
+
+MBH_pairs_SA_selected = c(MBH_pairs_SA_selected,sample(SA_pairs_left,10-length(MBH_pairs_SA_selected),replace=F))
+SA_pairs_left = SA_pairs_left[!(SA_pairs_left %in% c(SFG_pairs_SA_selected,MBH_pairs_SA_selected))]
+
+randomize_pairs = c()
+for(field in c('Metepec','PV')){
+  for(rep in 1:2){
+    block7 = sample(1:7,1)
+    block6 = sample(c(1:7)[-block7],1)
+    other_blocks = sample(c(1:7)[-c(block6,block7)])
+    rand_rep = rbind(
+      data.frame(Pair = SFG_pairs_Mex_selected,Source = 'SFG',Block = sample(rep(c(block6,other_blocks),each = 2))),
+      data.frame(Pair = MBH_pairs_Mex_selected,Source = 'MBH',Block = sample(rep(c(block6,other_blocks),each = 2))),
+      data.frame(Pair = SFG_pairs_SA_selected,Source = 'SFG',Block = sample(rep(other_blocks,each = 2))),
+      data.frame(Pair = MBH_pairs_SA_selected,Source = 'MBH',Block = sample(rep(other_blocks,each = 2))),
+      data.frame(Pair = unique(new_pairs_SA$Pair)[1:4],Source = 'Mix',Block = block6),
+      data.frame(Pair = Mex_pairs_left,Source = c(rep('MBH',2),rep('SFG',2)),Block = block7),
+      data.frame(Pair = unique(new_pairs_SA$Pair)[5:6],Source = 'Mix',Block = block7),
+      data.frame(Pair = 'Check',Source = 'SFG_Check',Block = 1:7)
+    )
+    rand_rep = rand_rep[order(rand_rep$Block),]
+    rand_rep$order_in_block = unlist(tapply(1:nrow(rand_rep),rand_rep$Block,function(x) sample(1:length(x))))
+    rand_rep = rand_rep[order(rand_rep$Block,rand_rep$order_in_block),]
+    rand_rep$Field = field
+    rand_rep$Rep = rep
+    randomize_pairs = rbind(randomize_pairs,rand_rep) 
+  }
+}
+
+# now split each pair into two lines - high and low - and randomize which comes first
+randomize_rows = randomize_pairs[rep(1:nrow(randomize_pairs),each = 2),]
+randomize_rows$Elevation_class = c(sapply(1:nrow(randomize_pairs),function(x) sample(c('High','Low'))))
+
+# for the new_pairs_SA, assign the correct seed source
+for(i in 1:nrow(new_pairs_SA)){
+  randomize_rows$Source[randomize_rows$Pair == new_pairs_SA$Pair[i] & randomize_rows$Elevation_class == new_pairs_SA$Elevation_class[i]] = new_pairs_SA$Source[i]
+}
+
+randomize_rows$Pedigree = with(randomize_rows,paste(Pair,Elevation_class,sep='-'))
+randomize_rows$Row = 1:(nrow(randomize_rows)/4)
+
+aug_F1_data = rbind(data.frame(F1_data,Source = NA),new_pair_Mex,new_pairs_SA)
+aug_F1_data$Pedigree = with(aug_F1_data,paste(Pair,Elevation_class,sep='-'))
+
+randomize_rows$success[randomize_rows$Source == 'SFG'] = aug_F1_data$SFG_Success[match(randomize_rows$Pedigree[randomize_rows$Source == 'SFG'],aug_F1_data$Pedigree)]
+randomize_rows$success[randomize_rows$Source == 'MBH'] = aug_F1_data$MBH_Success[match(randomize_rows$Pedigree[randomize_rows$Source == 'MBH'],aug_F1_data$Pedigree)]
+randomize_rows$ID = aug_F1_data$ID[match(randomize_rows$Pedigree,aug_F1_data$Pedigree)]
+
+randomize_rows$old_Pedigree = F1_data$Pedigree[match(randomize_rows$ID,F1_data$ID)]
+randomize_rows$old_Pedigree[randomize_rows$old_Pedigree == randomize_rows$Pedigree] = ''
+
+randomize_rows$Mixed_source = c('','Yes')[with(randomize_rows,tapply(Source,Pair,function(x) x[2]!=x[1]))[randomize_rows$Pair]+1]
+
+write.csv(randomize_rows[,c('Field','Rep','Row','Pedigree','old_Pedigree','Mixed_source','Source','ID','Block','Pair','Elevation_class')],file = 'F1_seed_randomization.csv',row.names=F)
+randomize_rows1 = randomize_rows
+
+change_to_SFG = c('SA_9','SA_2','SA_24','SA_14','SA_7')
+change_to_MBH = c('Mex_18','Mex_29','Mex_24','Mex_17','Mex_26')
+randomize_rows$Source[randomize_rows$Pair %in% change_to_SFG] = 'SFG'
+randomize_rows$Source[randomize_rows$Pair %in% change_to_MBH] = 'MBH'
+
+randomize_rows$Pedigree[randomize_rows$Pedigree == 'SA_10-High'] = 'SA_16-High'
+# 
+# 
+# # now, adjustments from Matt
+# drop_pairs = function(set,x) {
+#   if(!(all(x %in% set))) print('drop failed') 
+#   set[set %in% x == F]
+# }
+# 
+# MBH_pairs_SA_selected = drop_pairs(MBH_pairs_SA_selected,change_to_SFG)
+# SFG_pairs_SA_selected = c(SFG_pairs_SA_selected,change_to_SFG)
+# 
+# SFG_pairs_Mex_selected = drop_pairs(SFG_pairs_Mex_selected,change_to_MBH)
+# MBH_pairs_Mex_selected = c(MBH_pairs_Mex_selected,change_to_MBH)
+
+
+```
+
+
+
+Checking . . .
+```{r}
+with(subset(randomize_rows,Source == 'SFG'),table(Block,grepl('Mex',Pair),Field,Rep))
+with(subset(randomize_rows,Source == 'MBH'),table(Block,grepl('Mex',Pair),Field,Rep))
+apply(with(subset(randomize_rows),table(Block,Pair,Field,Rep))>0,c(2,3),colSums)
+with(subset(randomize_rows,Elevation_class == 'Low'),table(Block,Row,Field,Rep))
+with(subset(randomize_rows,Elevation_class == 'High'),table(Block,order_in_block,Field,Rep))
+with(randomize_rows,table(Block,order_in_block,Field,Rep))
+with(randomize_rows,table(Block,Rep,order_in_block,Field))
+with(randomize_rows,table(Block,Rep,Field,order_in_block))
+with(randomize_rows,table(Block,Rep,Field))
+```
+
+**Selecting Pairs for randomization - Not used**
+
+Randomization rules: 
+- divide field into two reps
+- within each rep, randomize all pairs
+- add 6 check pairs per rep - evenly spaced
+- within each pair, randomize high/low
+
+```{r}
+set.seed(1)  # fix seed 
+
+# pull out lines from SFG and MBH
+
+# Mex
+Mex_pairs_left = unique(SFG_pairs_Mex,MBH_pairs_Mex)
+Mex_pairs_left = Mex_pairs_left[Mex_pairs_left != 'Mex_14']
+
+SFG_pairs_Mex_selected = SFG_pairs_Mex[SFG_pairs_Mex %in% MBH_pairs_Mex == F]
+MBH_pairs_Mex_selected = MBH_pairs_Mex[MBH_pairs_Mex %in% SFG_pairs_Mex == F & MBH_pairs_Mex != 'Mex_14']
+Mex_pairs_left = Mex_pairs_left[!(Mex_pairs_left %in% c(SFG_pairs_Mex_selected,MBH_pairs_Mex_selected))]
+
+SFG_pairs_Mex_selected = c(SFG_pairs_Mex_selected,sample(Mex_pairs_left,12-length(SFG_pairs_Mex_selected),replace=F))
+Mex_pairs_left = Mex_pairs_left[!(Mex_pairs_left %in% c(SFG_pairs_Mex_selected,MBH_pairs_Mex_selected))]
+
+MBH_pairs_Mex_selected = c(MBH_pairs_Mex_selected,sample(Mex_pairs_left,12-length(MBH_pairs_Mex_selected),replace=F))
+Mex_pairs_left = Mex_pairs_left[!(Mex_pairs_left %in% c(SFG_pairs_Mex_selected,MBH_pairs_Mex_selected))]
+
+# add remaining
+SFG_pairs_Mex_selected = c(SFG_pairs_Mex_selected, Mex_pairs_left)
+MBH_pairs_Mex_selected = c(MBH_pairs_Mex_selected,'Mex_14','Mex_31')
+
+# SA
+SA_pairs_left = unique(SFG_pairs_SA,MBH_pairs_SA)
+
+SFG_pairs_SA_selected = SFG_pairs_SA[SFG_pairs_SA %in% MBH_pairs_SA == F]
+MBH_pairs_SA_selected = MBH_pairs_SA[MBH_pairs_SA %in% SFG_pairs_SA == F & MBH_pairs_SA != 'SA_14']
+SA_pairs_left = SA_pairs_left[!(SA_pairs_left %in% c(SFG_pairs_SA_selected,MBH_pairs_SA_selected))]
+
+SFG_pairs_SA_selected = c(SFG_pairs_SA_selected,sample(SA_pairs_left,10-length(SFG_pairs_SA_selected),replace=F))
+SA_pairs_left = SA_pairs_left[!(SA_pairs_left %in% c(SFG_pairs_SA_selected,MBH_pairs_SA_selected))]
+
+MBH_pairs_SA_selected = c(MBH_pairs_SA_selected,sample(SA_pairs_left,10-length(MBH_pairs_SA_selected),replace=F))
+SA_pairs_left = SA_pairs_left[!(SA_pairs_left %in% c(SFG_pairs_SA_selected,MBH_pairs_SA_selected))]
+
+base_rep = rbind(
+                data.frame(Pair = SFG_pairs_Mex_selected, Source = 'SFG'),
+                data.frame(Pair = MBH_pairs_Mex_selected, Source = 'MBH'),
+                data.frame(Pair = SFG_pairs_SA_selected, Source = 'SFG'),
+                data.frame(Pair = MBH_pairs_SA_selected, Source = 'MBH'),
+                data.frame(Pair = unique(new_pairs_SA$Pair), Source = 'Mix')
+          )
+
+nrows = nrow(base_rep)
+check_spacing = nrows / (6)
+check_locs = seq(check_spacing/2,nrows,by=check_spacing)
+                
+              
+randomize_pairs = c()  
+for(field in c('Metepec','PV')){
+  for(rep in 1:2){
+    rand_rep = base_rep
+    rand_rep$order = sample(1:nrow(base_rep))
+    rand_rep = rbind(rand_rep,data.frame(Pair = 'Check',Source = 'SFG_check',order = check_locs))
+    rand_rep$order = rank(rand_rep$order)
+    rand_rep = rand_rep[order(rand_rep$order),]
+    rand_rep$Field = field
+    rand_rep$Rep = rep
+    randomize_pairs = rbind(randomize_pairs,rand_rep) 
+  }
+}
+
+# now split each pair into two lines - high and low - and randomize which comes first
+randomize_rows = randomize_pairs[rep(1:nrow(randomize_pairs),each = 2),]
+randomize_rows$Elevation_class = c(sapply(1:nrow(randomize_pairs),function(x) sample(c('High','Low'))))
+
+# for the new_pairs_SA, assign the correct seed source
+for(i in 1:nrow(new_pairs_SA)){
+  randomize_rows$Source[randomize_rows$Pair == new_pairs_SA$Pair[i] & randomize_rows$Elevation_class == new_pairs_SA$Elevation_class[i]] = new_pairs_SA$Source[i]
+}
+
+randomize_rows$Pedigree = with(randomize_rows,paste(Pair,Elevation_class,sep='-'))
+randomize_rows$Row = as.numeric(as.factor(with(randomize_rows,order + .1*rep(1:2,nrow(randomize_pairs)))))
+
+
+aug_F1_data = rbind(data.frame(F1_data,Source = NA),new_pair_Mex,new_pairs_SA)
+aug_F1_data$Pedigree = with(aug_F1_data,paste(Pair,Elevation_class,sep='-'))
+
+randomize_rows$success[randomize_rows$Source == 'SFG'] = aug_F1_data$SFG_Success[match(randomize_rows$Pedigree[randomize_rows$Source == 'SFG'],aug_F1_data$Pedigree)]
+randomize_rows$success[randomize_rows$Source == 'MBH'] = aug_F1_data$MBH_Success[match(randomize_rows$Pedigree[randomize_rows$Source == 'MBH'],aug_F1_data$Pedigree)]
+randomize_rows$ID = aug_F1_data$ID[match(randomize_rows$Pedigree,aug_F1_data$Pedigree)]
+
+randomize_rows$old_Pedigree = F1_data$Pedigree[match(randomize_rows$ID,F1_data$ID)]
+randomize_rows$old_Pedigree[randomize_rows$old_Pedigree == randomize_rows$Pedigree] = NA
+
+
+```
+
+
+
+```{r}
+with(droplevels(subset(randomize_rows,!grepl('Check',Pair))),table(Source,grepl('Mex',Pair),Field,Rep))
+with(subset(randomize_rows),table(Field,Pair,Rep))
+with(subset(randomize_rows,Elevation_class == 'Low'),table(Field,Rep))
+with(subset(randomize_rows,Elevation_class == 'High'),table(Block,order_in_block,Field,Rep))
+with(randomize_rows,table(Block,order_in_block,Field,Rep))
+with(randomize_rows,table(Block,Rep,order_in_block,Field))
+with(randomize_rows,table(Block,Rep,Field,order_in_block))
+with(randomize_rows,table(Block,Rep,Field))
+```
+
+
+
+```{r}
+
+```
+
